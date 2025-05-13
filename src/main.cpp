@@ -59,8 +59,18 @@ int main(int argc, char* argv[])
     {
         int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
         std::cout << "Client connected\n";
+
+        char req_buf[1024];
+        size_t bytes_read = read(client_fd, req_buf, 1024);
+        req_buf[bytes_read] = 0;
+            
+
         int message_size = 0;
-        int correlation_id = 7 << 24; // 7 in big endian
+        int idx = 8;
+        int correlation_id = ((uint8_t)req_buf[idx + 0] |
+                              (uint8_t)req_buf[idx + 1] << 8 |
+                              (uint8_t)req_buf[idx + 2] << 16 |
+                              (uint8_t)req_buf[idx + 3] << 24);
 
         write(client_fd, &message_size, 4);
         write(client_fd, &correlation_id, 4);
