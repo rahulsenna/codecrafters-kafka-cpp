@@ -75,6 +75,9 @@ int main(int argc, char* argv[])
         write(client_fd, &message_size, 4);
         write(client_fd, &correlation_id, 4);
 
+        int error_code = 35 << 8; // 35 in int16 big endian
+        write(client_fd, &error_code, 2);
+
         close(client_fd);    
     }    
 
