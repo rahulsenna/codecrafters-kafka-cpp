@@ -81,52 +81,54 @@ int main(int argc, char* argv[])
     
     while (1) 
     {
-        int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_addr), &client_addr_len);
+        int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr *>(&client_addr), &client_addr_len);
         std::cout << "Client connected\n";
 
         char req_buf[1024];
-        size_t bytes_read = read(client_fd, req_buf, 1024);
-        req_buf[bytes_read] = 0;
-            
         uint8_t resp_buf[1024];
-        memset(resp_buf, 0, 1024);
-        uint8_t *ptr = resp_buf+4;
-        constexpr int cor_id_offset = 8;
-        copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
-
-        constexpr int req_api_offset = 4;
-        int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
-                                   (uint8_t)req_buf[req_api_offset + 3]);
-
-        int error_code = 35;
-        if (request_api_version <= 4)
+        while (size_t bytes_read = read(client_fd, req_buf, 1024))
         {
-            error_code = 0;
+
+            req_buf[bytes_read] = 0;
+            memset(resp_buf, 0, 1024);
+            uint8_t *ptr = resp_buf + 4;
+            constexpr int cor_id_offset = 8;
+            copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
+
+            constexpr int req_api_offset = 4;
+            int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
+                                           (uint8_t)req_buf[req_api_offset + 3]);
+
+            int error_code = 35;
+            if (request_api_version <= 4)
+            {
+                error_code = 0;
+            }
+            write_int16_be(&ptr, error_code);
+
+            // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
+            int8_t num_api_keys = 1 + 1; // 1 + # of elements because 0 is null array and 1 is empty array
+
+            int8_t tag_buffer_byte = 0;
+
+            *ptr++ = num_api_keys;
+            copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
+            write_int16_be(&ptr, 0);                       // min_ver
+            write_int16_be(&ptr, request_api_version);     // max_ver
+            *ptr++ = tag_buffer_byte;
+
+            write_int32_be(&ptr, 0); // throttle_time_ms
+            *ptr++ = tag_buffer_byte;
+
+            int message_size = ptr - resp_buf;
+            ptr = resp_buf;
+            write_int32_be(&ptr, message_size - 4);
+
+            write(client_fd, resp_buf, message_size);
         }
-        write_int16_be(&ptr, error_code);
 
-        // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
-        int8_t num_api_keys = 1+1; // 1 + # of elements because 0 is null array and 1 is empty array
-
-        int8_t tag_buffer_byte = 0;
-
-        *ptr++ = num_api_keys;
-        copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
-        write_int16_be(&ptr, 0); // min_ver
-        write_int16_be(&ptr, request_api_version); // max_ver
-        *ptr++ = tag_buffer_byte;
-
-        write_int32_be(&ptr, 0); // throttle_time_ms
-        *ptr++ = tag_buffer_byte;
-        
-        int message_size = ptr-resp_buf;
-        ptr = resp_buf;
-        write_int32_be(&ptr, message_size-4);
-        
-        write(client_fd, resp_buf, message_size);
-
-        close(client_fd);    
-    }    
+        close(client_fd);
+    }
 
     close(server_fd);
     return 0;
