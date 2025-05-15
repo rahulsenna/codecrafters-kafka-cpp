@@ -109,18 +109,22 @@ int main(int argc, char* argv[])
             write_int16_be(&ptr, error_code);
 
             // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
-            int8_t num_api_keys = 1 + 1; // 1 + # of elements because 0 is null array and 1 is empty array
-
-            int8_t tag_buffer_byte = 0;
-
-            *ptr++ = num_api_keys;
+            constexpr int8_t tag_buffer_null = 0;
+            int8_t num_api_keys = 1 + 2; // 1 + # of elements because 0 is null array and 1 is empty array
+            *ptr++ = num_api_keys; // array_start
+            
             copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
             write_int16_be(&ptr, 0);                       // min_ver
             write_int16_be(&ptr, request_api_version);     // max_ver
-            *ptr++ = tag_buffer_byte;
+            *ptr++ = tag_buffer_null; // array_end
+
+            write_int16_be(&ptr, 75); // api_key ( DescribeTopicPartitions )
+            write_int16_be(&ptr, 0);  // min_ver
+            write_int16_be(&ptr, 0);  // max_ver
+            *ptr++ = tag_buffer_null; // array_end
 
             write_int32_be(&ptr, 0); // throttle_time_ms
-            *ptr++ = tag_buffer_byte;
+            *ptr++ = tag_buffer_null;
 
             int message_size = ptr - resp_buf;
             ptr = resp_buf;
