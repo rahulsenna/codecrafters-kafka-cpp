@@ -82,6 +82,8 @@ int main(int argc, char* argv[])
     while (1) 
     {
         int client_fd = accept(server_fd, reinterpret_cast<struct sockaddr *>(&client_addr), &client_addr_len);
+        if (fork() != 0)
+            continue;
         std::cout << "Client connected\n";
 
         char req_buf[1024];
