@@ -65,18 +65,53 @@ int main(int argc, char* argv[])
         req_buf[bytes_read] = 0;
             
 
-        int message_size = 0;
-        int idx = 8;
-        int correlation_id = ((uint8_t)req_buf[idx + 0] |
-                              (uint8_t)req_buf[idx + 1] << 8 |
-                              (uint8_t)req_buf[idx + 2] << 16 |
-                              (uint8_t)req_buf[idx + 3] << 24);
+        int message_size = (4 /*header*/ + 2 /*error_code*/ + 13) << 24;
+        constexpr int cor_id_offset = 8;
+        int correlation_id = ((uint8_t)req_buf[cor_id_offset + 0] |
+                              (uint8_t)req_buf[cor_id_offset + 1] << 8 |
+                              (uint8_t)req_buf[cor_id_offset + 2] << 16 |
+                              (uint8_t)req_buf[cor_id_offset + 3] << 24);
 
         write(client_fd, &message_size, 4);
         write(client_fd, &correlation_id, 4);
 
+        constexpr int req_api_offset = 4;
+        int request_api_key = ((uint8_t)req_buf[req_api_offset + 0] |
+                               (uint8_t)req_buf[req_api_offset + 1] << 8);
+        int request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
+                                   (uint8_t)req_buf[req_api_offset + 3]);
+
         int error_code = 35 << 8; // 35 in int16 big endian
+        if (request_api_version <= 4)
+        {
+            error_code = 0;
+        }
         write(client_fd, &error_code, 2);
+
+
+        /* https://kafka.apache.org/protocol.html
+        ApiVersions Response (Version: 3) => error_code [api_keys] throttle_time_ms _tagged_fields 
+        error_code => INT16
+        api_keys => api_key min_version max_version _tagged_fields 
+            api_key => INT16
+            min_version => INT16
+            max_version => INT16
+        throttle_time_ms => INT32 */
+
+        int min_ver = 0;
+        int max_ver = 4 << 8;
+        int num_api_keys = 1+1; // 1 + # of elements because 0 is null array and 1 is empty array
+        int throttle_time_ms = 0;
+        int8_t tag_buffer_byte = 0;
+
+        write(client_fd, &num_api_keys, 1);
+        write(client_fd, &request_api_key, 2);
+
+        write(client_fd, &min_ver, 2);
+        write(client_fd, &max_ver, 2);
+        write(client_fd, &tag_buffer_byte, 1);
+        write(client_fd, &throttle_time_ms, 4);
+        write(client_fd, &tag_buffer_byte, 1);
 
         close(client_fd);    
     }    
