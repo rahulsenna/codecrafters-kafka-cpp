@@ -98,44 +98,85 @@ int main(int argc, char* argv[])
             copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
 
             constexpr int req_api_offset = 4;
+            int16_t request_api_key = ((uint8_t)req_buf[req_api_offset + 0] |
+                                       (uint8_t)req_buf[req_api_offset + 1]);
+
             int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
                                            (uint8_t)req_buf[req_api_offset + 3]);
 
-            int error_code = 35;
+            int error_code = 35; // (UNSUPPORTED_VERSION)
             if (request_api_version <= 4)
             {
-                error_code = 0;
+                error_code = 0; // (NO_ERROR)
             }
-            write_int16_be(&ptr, error_code);
+            if (request_api_key == 0x004b)
+            {
+                error_code = 3; // (UNKNOWN_TOPIC)
+            }
 
             // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
-            constexpr int8_t tag_buffer_null = 0;
-            int8_t num_api_keys = 1 + 2; // 1 + # of elements because 0 is null array and 1 is empty array
-            *ptr++ = num_api_keys; // array_start
+            constexpr int8_t TAG_BUFFER = 0;
             
-            copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
-            write_int16_be(&ptr, 0);                       // min_ver
-            write_int16_be(&ptr, request_api_version);     // max_ver
-            *ptr++ = tag_buffer_null; // array_end
+            if (request_api_key == 0x004b) // DescribeTopicPartitions
+            {
+                constexpr int client_id_offset = cor_id_offset + 4;
+                int client_id_len = ((uint8_t)req_buf[client_id_offset] | (uint8_t)req_buf[client_id_offset + 1]) + /* TAG_BUFFER BYTE */ 1 + /* LENGTH BYTES */ 2;
+                int topic_offset = client_id_offset+client_id_len;
+                *ptr++ = TAG_BUFFER;
+                write_int32_be(&ptr, 0);  // throttle_time_ms
+                *ptr++ = req_buf[topic_offset++]; // topic.length
+                
+                write_int16_be(&ptr, error_code);
 
-            write_int16_be(&ptr, 75); // api_key ( DescribeTopicPartitions )
-            write_int16_be(&ptr, 0);  // min_ver
-            write_int16_be(&ptr, 0);  // max_ver
-            *ptr++ = tag_buffer_null; // array_end
+                int topic_name_len = (uint8_t)req_buf[topic_offset];
+                copy_bytes(&ptr, &req_buf[topic_offset], topic_name_len);
+                for (int i = 0; i < 16; ++i) // topic_id
+                {
+                    *ptr++ = 0;
+                }
+                *ptr++ = 0; // topic.is_internal
+                *ptr++ = 1; // topic.partition
+                write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                *ptr++ = TAG_BUFFER;
+                *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                *ptr++ = TAG_BUFFER;
+            }
 
-            write_int32_be(&ptr, 0); // throttle_time_ms
-            *ptr++ = tag_buffer_null;
+            if (request_api_key == 0x0012) // API Versions
+            {
+                write_int16_be(&ptr, error_code);
+                int8_t num_api_keys = 1 + 2; // 1 + # of elements because 0 is null array and 1 is empty array
+                *ptr++ = num_api_keys;
+                copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
+                write_int16_be(&ptr, 0);                       // min_ver
+                write_int16_be(&ptr, request_api_version);     // max_ver
+                *ptr++ = TAG_BUFFER;                      // array_end
 
-            int message_size = ptr - resp_buf;
-            ptr = resp_buf;
-            write_int32_be(&ptr, message_size - 4);
+                write_int16_be(&ptr, 75); // api_key ( DescribeTopicPartitions )
+                write_int16_be(&ptr, 0);  // min_ver
+                write_int16_be(&ptr, 0);  // max_ver
+                *ptr++ = TAG_BUFFER; // array_end
 
-            write(client_fd, resp_buf, message_size);
-        }
+                write_int32_be(&ptr, 0); // throttle_time_ms
+                *ptr++ = TAG_BUFFER;
+            }
+
+
+                int message_size = ptr - resp_buf;
+                ptr = resp_buf;
+                write_int32_be(&ptr, message_size - 4);
+
+                write(client_fd, resp_buf, message_size);
+            }
 
         close(client_fd);
     }
 
     close(server_fd);
     return 0;
+}
+
+void DescribeTopicPartitionsResponse(uint8_t *ptr)
+{
+    
 }
