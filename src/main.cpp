@@ -7,6 +7,9 @@
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <fcntl.h>
+#include <string_view>
+#include <cassert>
 
 inline void write_int32_be(uint8_t **dest, int32_t value)
 {
@@ -37,6 +40,7 @@ int main(int argc, char* argv[])
     // Disable output buffering
     std::cout << std::unitbuf;
     std::cerr << std::unitbuf;
+    setbuf(stdout, 0);
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -109,10 +113,6 @@ int main(int argc, char* argv[])
             {
                 error_code = 0; // (NO_ERROR)
             }
-            if (request_api_key == 0x004b)
-            {
-                error_code = 3; // (UNKNOWN_TOPIC)
-            }
 
             // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
             constexpr int8_t TAG_BUFFER = 0;
@@ -126,20 +126,60 @@ int main(int argc, char* argv[])
                 write_int32_be(&ptr, 0);  // throttle_time_ms
                 *ptr++ = req_buf[topic_offset++]; // topic.length
                 
-                write_int16_be(&ptr, error_code);
+                int log_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log", O_RDONLY, S_IRUSR);
+                assert(log_fd != -1);
+                uint8_t metadata[1024];
+                size_t log_bytes = read(log_fd, metadata, 1024);
+                std::cout << "log_bytes count: " << log_bytes << '\n';
+                for (int i = 0; i < log_bytes; ++i)
+                	printf("%02X ", metadata[i]);
+                constexpr int log_topic_offset = 162;
+                std::string_view log_topic_name((char*)metadata+log_topic_offset);
+                std::cout << "log_topic_name: " << log_topic_name << '\n';
 
-                int topic_name_len = (uint8_t)req_buf[topic_offset];
-                copy_bytes(&ptr, &req_buf[topic_offset], topic_name_len);
-                for (int i = 0; i < 16; ++i) // topic_id
+                std::string_view topic_name(&req_buf[topic_offset+1]);
+                std::cout << "topic_name: " << topic_name << '\n';
+
+
+                if (log_topic_name == topic_name)
                 {
-                    *ptr++ = 0;
+                    write_int16_be(&ptr, 0); // (NO_ERROR)
+                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
+                    copy_bytes(&ptr, (char *)metadata + log_topic_offset+log_topic_name.length(), 16);
+                    *ptr++ = 0; // topic.is_internal
+                    *ptr++ = 2; // # of partitions  == 1
+                    write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
+                    write_int32_be(&ptr, 0); // # Partition 0 - Partition Index (INT32, 0)
+                    write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
+                    write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
+                    *ptr++ = 2; // # Partition 0 - Replica nodes length + 1 (1 replica node)
+                    write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
+                    *ptr++ = 2; // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
+                    write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
+                    *ptr++ = 1; // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
+                    *ptr++ = 1; // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
+                    *ptr++ = 1; // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
+                    *ptr++ = 0; // # Empty tag buffer
+
+                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                    *ptr++ = TAG_BUFFER;
+                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                    *ptr++ = TAG_BUFFER;
+                                    
+                } else
+                {
+                    write_int16_be(&ptr, 3); // (UNKNOWN_TOPIC)
+                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
+                    for (int i = 0; i < 16; ++i) // topic_id
+                        *ptr++ = 0;
+                    
+                    *ptr++ = 0; // topic.is_internal
+                    *ptr++ = 1; // topic.partition
+                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                    *ptr++ = TAG_BUFFER;
+                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                    *ptr++ = TAG_BUFFER;
                 }
-                *ptr++ = 0; // topic.is_internal
-                *ptr++ = 1; // topic.partition
-                write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
-                *ptr++ = TAG_BUFFER;
-                *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
-                *ptr++ = TAG_BUFFER;
             }
 
             if (request_api_key == 0x0012) // API Versions
