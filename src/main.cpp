@@ -35,6 +35,54 @@ inline void copy_bytes(uint8_t **dest, char *src, int cnt)
     }
 }
 
+void hexdump(const void *data, size_t size)
+{
+    const unsigned char *byte = (const unsigned char *)data;
+    char buffer[4096];
+    size_t buf_used = 0;
+    size_t i, j;
+
+    for (i = 0; i < size; i += 16) {
+        char line[80];  // A line won't exceed 80 chars
+        int len = snprintf(line, sizeof(line), "%08zx  ", i);
+
+        // Hex part
+        for (j = 0; j < 16; j++) {
+            if (i + j < size)
+                len += snprintf(line + len, sizeof(line) - len, "%02x ", byte[i + j]);
+            else
+                len += snprintf(line + len, sizeof(line) - len, "   ");
+            if (j == 7)
+                len += snprintf(line + len, sizeof(line) - len, " ");
+        }
+
+        // ASCII part
+        len += snprintf(line + len, sizeof(line) - len, " |");
+        for (j = 0; j < 16 && i + j < size; j++) {
+            unsigned char ch = byte[i + j];
+            len += snprintf(line + len, sizeof(line) - len, "%c", isprint(ch) ? ch : '.');
+        }
+        len += snprintf(line + len, sizeof(line) - len, "|\n");
+
+        // Append line to buffer
+        if (buf_used + len < sizeof(buffer)) {
+            memcpy(buffer + buf_used, line, len);
+            buf_used += len;
+        } else {
+            // Prevent buffer overflow
+            break;
+        }
+    }
+
+    // Null-terminate and print once
+    buffer[buf_used] = '\0';
+    printf("\n---------------------[start]--------------------\n"
+           "%s"
+           "\n----------------------[end]---------------------\n",
+           buffer);
+}
+
+
 int main(int argc, char* argv[])
 {
     // Disable output buffering
@@ -102,10 +150,10 @@ int main(int argc, char* argv[])
             copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
 
             constexpr int req_api_offset = 4;
-            int16_t request_api_key = ((uint8_t)req_buf[req_api_offset + 0] |
+            int16_t request_api_key = ((uint8_t)req_buf[req_api_offset + 0] >> 8 |
                                        (uint8_t)req_buf[req_api_offset + 1]);
 
-            int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] |
+            int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] >> 8 |
                                            (uint8_t)req_buf[req_api_offset + 3]);
 
             int error_code = 35; // (UNSUPPORTED_VERSION)
@@ -133,33 +181,73 @@ int main(int argc, char* argv[])
                 std::cout << "log_bytes count: " << log_bytes << '\n';
                 for (int i = 0; i < log_bytes; ++i)
                 	printf("%02X ", metadata[i]);
+                // hexdump(metadata, log_bytes);
                 constexpr int log_topic_offset = 162;
-                std::string_view log_topic_name((char*)metadata+log_topic_offset);
-                std::cout << "log_topic_name: " << log_topic_name << '\n';
 
                 std::string_view topic_name(&req_buf[topic_offset+1]);
-                std::cout << "topic_name: " << topic_name << '\n';
+
+                int curr_idx = 0;
+                bool found_topic = false;
+                int found_topic_id_offset = 0;
+                int8_t partitions_length = 1;
+                while(curr_idx < log_bytes)
+                {
+                    int batch_length_idx = curr_idx+8; //  Batch Length (4 bytes)
+                    int32_t batch_len = ((uint8_t)metadata[batch_length_idx + 0] >> 24 |
+                                         (uint8_t)metadata[batch_length_idx + 1] >> 16 |
+                                         (uint8_t)metadata[batch_length_idx + 2] >> 8 |
+                                         (uint8_t)metadata[batch_length_idx + 3]);
+                                        
+                    std::cout << "batch_len: " << batch_len << '\n';
+                    if (batch_len <= 0)
+                        break;
+                    int next_part = curr_idx+12+batch_len;
+
+                    int records_len_offset = curr_idx + 57;
+                    int32_t records_len = ((uint8_t)metadata[records_len_offset + 0] >> 24 |
+                                           (uint8_t)metadata[records_len_offset + 1] >> 16 |
+                                           (uint8_t)metadata[records_len_offset + 2] >> 8 |
+                                           (uint8_t)metadata[records_len_offset + 3]);
+
+                    
 
 
-                if (log_topic_name == topic_name)
+                    int this_topic_idx = curr_idx + 71;
+                    std::string_view this_topic_name((char*)metadata+this_topic_idx);
+                    std::cout << "this_topic_name: " << this_topic_name << " records_len: " << records_len << '\n';
+                    if (this_topic_name == topic_name)
+                    {
+                        found_topic = true;
+                        found_topic_id_offset = this_topic_idx;
+                        partitions_length = records_len;
+                        break;
+                    }
+                    curr_idx = next_part;
+                    partitions_length++;
+                }
+
+                if (found_topic)
                 {
                     write_int16_be(&ptr, 0); // (NO_ERROR)
                     copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
-                    copy_bytes(&ptr, (char *)metadata + log_topic_offset+log_topic_name.length(), 16);
+                    copy_bytes(&ptr, (char *)metadata + found_topic_id_offset+topic_name.length(), 16);
                     *ptr++ = 0; // topic.is_internal
-                    *ptr++ = 2; // # of partitions  == 1
-                    write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
-                    write_int32_be(&ptr, 0); // # Partition 0 - Partition Index (INT32, 0)
-                    write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
-                    write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
-                    *ptr++ = 2; // # Partition 0 - Replica nodes length + 1 (1 replica node)
-                    write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
-                    *ptr++ = 2; // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
-                    write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
-                    *ptr++ = 1; // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
-                    *ptr++ = 1; // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
-                    *ptr++ = 1; // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
-                    *ptr++ = 0; // # Empty tag buffer
+                    *ptr++ = partitions_length; // # of partitions  == 1
+                    for (int i = 0; i < (partitions_length-1); ++i)
+                    {
+                        write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
+                        write_int32_be(&ptr, i); // # Partition 0 - Partition Index (INT32, 0)
+                        write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
+                        write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
+                        *ptr++ = 2;              // # Partition 0 - Replica nodes length + 1 (1 replica node)
+                        write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
+                        *ptr++ = 2;              // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
+                        write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
+                        *ptr++ = 1;              // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
+                        *ptr++ = 1;              // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
+                        *ptr++ = 1;              // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
+                        *ptr++ = 0;              // # Empty tag buffer
+                    }
 
                     write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
                     *ptr++ = TAG_BUFFER;
