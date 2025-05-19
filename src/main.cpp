@@ -19,6 +19,18 @@ inline void write_int32_be(uint8_t **dest, int32_t value)
     (*dest)[3] = value & 0xFF;
     (*dest) += 4;
 }
+inline void write_int64_be(uint8_t **dest, int64_t value)
+{
+    (*dest)[0] = (value >> 56) & 0xFF;
+    (*dest)[1] = (value >> 48) & 0xFF;
+    (*dest)[2] = (value >> 40) & 0xFF;
+    (*dest)[3] = (value >> 32) & 0xFF;
+    (*dest)[4] = (value >> 24) & 0xFF;
+    (*dest)[5] = (value >> 16) & 0xFF;
+    (*dest)[6] = (value >> 8) & 0xFF;
+    (*dest)[7] = value & 0xFF;
+    (*dest) += 8;
+}
 
 inline void write_int16_be(uint8_t **dest, int16_t value)
 {
@@ -269,9 +281,35 @@ int main(int argc, char* argv[])
             {
                 *ptr++ = TAG_BUFFER;
                 write_int32_be(&ptr, 0); // (throttle_time_ms)
+
+                constexpr int client_id_offset = cor_id_offset + 4;
+                int client_id_len = ((uint8_t)req_buf[client_id_offset] | (uint8_t)req_buf[client_id_offset + 1]) + /* TAG_BUFFER BYTE */ 1 + /* LENGTH BYTES */ 2;
+                int topic_offset = client_id_offset+client_id_len +21;
+                int8_t topic_length = req_buf[topic_offset++];
+
                 write_int16_be(&ptr, 0); // (NO_ERROR)
                 write_int32_be(&ptr, 0); // (session_id)
-                *ptr++ = 1; // (.num_responses) = 0
+                *ptr++ = topic_length; // (.num_responses) = 0
+                if (topic_length> 1)
+                {
+                    copy_bytes(&ptr, req_buf+topic_offset, 16);
+                    int partitions_length = 2;
+                    *ptr++ = partitions_length; // # of partitions  == 1
+                    for (int i = 0; i < (partitions_length - 1); ++i)
+                    {
+                        write_int32_be(&ptr, i); // # Partition Index (INT32, 0)
+                        write_int16_be(&ptr, 100); //  Error Code (UNKNOWN_TOPIC_ID)
+
+                        write_int64_be(&ptr, 0xffffffffffffffff); // high_watermark
+                        write_int64_be(&ptr, 0xffffffffffffffff); // last_stable_offset
+                        write_int64_be(&ptr, 0xffffffffffffffff); // log_start_offset
+                        *ptr++ = 0;              // num_aborted_transactions
+                        write_int32_be(&ptr, 0xffffffff); // preferred_read_replica
+                        *ptr++ = TAG_BUFFER;
+                        *ptr++ = TAG_BUFFER;
+                        *ptr++ = TAG_BUFFER;
+                    }
+                }
                 *ptr++ = TAG_BUFFER;
 
             }
