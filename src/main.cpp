@@ -147,7 +147,7 @@ int main(int argc, char* argv[])
             memset(resp_buf, 0, 1024);
             uint8_t *ptr = resp_buf + 4;
             constexpr int cor_id_offset = 8;
-            copy_bytes(&ptr, &req_buf[cor_id_offset], 4);
+            copy_bytes(&ptr, &req_buf[cor_id_offset], 4); // correlation ID
 
             constexpr int req_api_offset = 4;
             int16_t request_api_key = ((uint8_t)req_buf[req_api_offset + 0] >> 8 |
@@ -265,6 +265,16 @@ int main(int argc, char* argv[])
                 *ptr++ = TAG_BUFFER;
             }
 
+            if (request_api_key == 0x0001) // Fetch
+            {
+                *ptr++ = TAG_BUFFER;
+                write_int32_be(&ptr, 0); // (throttle_time_ms)
+                write_int16_be(&ptr, 0); // (NO_ERROR)
+                write_int32_be(&ptr, 0); // (session_id)
+                *ptr++ = 1; // (.num_responses) = 0
+                *ptr++ = TAG_BUFFER;
+
+            }
             if (request_api_key == 0x0012) // API Versions
             {
                 // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
