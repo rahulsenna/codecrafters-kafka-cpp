@@ -156,13 +156,6 @@ int main(int argc, char* argv[])
             int16_t request_api_version = ((uint8_t)req_buf[req_api_offset + 2] >> 8 |
                                            (uint8_t)req_buf[req_api_offset + 3]);
 
-            int error_code = 35; // (UNSUPPORTED_VERSION)
-            if (request_api_version <= 4)
-            {
-                error_code = 0; // (NO_ERROR)
-            }
-
-            // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
             constexpr int8_t TAG_BUFFER = 0;
             
             if (request_api_key == 0x004b) // DescribeTopicPartitions
@@ -274,6 +267,11 @@ int main(int argc, char* argv[])
 
             if (request_api_key == 0x0012) // API Versions
             {
+                // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
+                int error_code = 35; // (UNSUPPORTED_VERSION)
+                if (request_api_version <= 4)
+                    error_code = 0; // (NO_ERROR)
+                
                 write_int16_be(&ptr, error_code);
                 int8_t num_api_keys = 1 + 2; // 1 + # of elements because 0 is null array and 1 is empty array
                 *ptr++ = num_api_keys;
@@ -292,11 +290,11 @@ int main(int argc, char* argv[])
             }
 
 
-                int message_size = ptr - resp_buf;
-                ptr = resp_buf;
-                write_int32_be(&ptr, message_size - 4);
+            int message_size = ptr - resp_buf;
+            ptr = resp_buf;
+            write_int32_be(&ptr, message_size - 4);
 
-                write(client_fd, resp_buf, message_size);
+            write(client_fd, resp_buf, message_size);
             }
 
         close(client_fd);
