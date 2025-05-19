@@ -229,7 +229,6 @@ int main(int argc, char* argv[])
                             break;
                         }
                         curr_idx = next_part;
-                        partitions_length++;
                     }
 
                     if (found_topic)
@@ -290,15 +289,61 @@ int main(int argc, char* argv[])
                 write_int16_be(&ptr, 0); // (NO_ERROR)
                 write_int32_be(&ptr, 0); // (session_id)
                 *ptr++ = topic_length; // (.num_responses) = 0
-                if (topic_length> 1)
+
+                int log_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log", O_RDONLY, S_IRUSR);
+                assert(log_fd != -1);
+                uint8_t metadata[1024];
+                size_t total_bytes_in_log = read(log_fd, metadata, 1024);
+                constexpr int log_topic_offset = 162;
+
+                for (int8_t i = 1; i < topic_length; ++i)
                 {
                     copy_bytes(&ptr, req_buf+topic_offset, 16);
-                    int partitions_length = 2;
+
+                    int curr_log_idx = 0;
+                    bool found_topic = false;
+                    int found_topic_id_offset = 0;
+                    int8_t partitions_length = 2;
+                    int16_t error_code = 100; // (UNKNOWN_TOPIC_ID)
+                    while (curr_log_idx < total_bytes_in_log)
+                    {
+                        int batch_length_idx = curr_log_idx + 8; //  Batch Length (4 bytes)
+                        int32_t batch_len = ((uint8_t)metadata[batch_length_idx + 0] >> 24 |
+                                            (uint8_t)metadata[batch_length_idx + 1] >> 16 |
+                                            (uint8_t)metadata[batch_length_idx + 2] >> 8 |
+                                            (uint8_t)metadata[batch_length_idx + 3]);
+
+                        if (batch_len <= 0)
+                            break;
+                        int next_part = curr_log_idx + 12 + batch_len;
+
+                        int records_len_offset = curr_log_idx + 57;
+                        int32_t records_len = ((uint8_t)metadata[records_len_offset + 0] >> 24 |
+                                            (uint8_t)metadata[records_len_offset + 1] >> 16 |
+                                            (uint8_t)metadata[records_len_offset + 2] >> 8 |
+                                            (uint8_t)metadata[records_len_offset + 3]);
+
+                        int log_topic_idx = curr_log_idx + 70;
+                        uint8_t log_topic_name_length = metadata[log_topic_idx];
+                        uint8_t *A = (uint8_t *)metadata + log_topic_idx + log_topic_name_length;
+                        uint8_t *B = (uint8_t *)req_buf + topic_offset;
+                        
+                        if (std::memcmp(A, B, 16) == 0)
+                        {    
+                            found_topic = true;
+                            found_topic_id_offset = log_topic_idx;
+                            partitions_length = records_len;
+                            error_code = 0;
+                            break;
+                        }
+                        curr_log_idx = next_part;
+                    }
+                    
                     *ptr++ = partitions_length; // # of partitions  == 1
-                    for (int i = 0; i < (partitions_length - 1); ++i)
+                    for (int8_t i = 0; i < (partitions_length - 1); ++i)
                     {
                         write_int32_be(&ptr, i); // # Partition Index (INT32, 0)
-                        write_int16_be(&ptr, 100); //  Error Code (UNKNOWN_TOPIC_ID)
+                        write_int16_be(&ptr, error_code);
 
                         write_int64_be(&ptr, 0xffffffffffffffff); // high_watermark
                         write_int64_be(&ptr, 0xffffffffffffffff); // last_stable_offset
