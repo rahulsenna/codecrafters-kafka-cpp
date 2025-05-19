@@ -172,102 +172,104 @@ int main(int argc, char* argv[])
                 int topic_offset = client_id_offset+client_id_len;
                 *ptr++ = TAG_BUFFER;
                 write_int32_be(&ptr, 0);  // throttle_time_ms
-                *ptr++ = req_buf[topic_offset++]; // topic.length
+                int8_t topic_length = req_buf[topic_offset++];
+                *ptr++ = topic_length;
+                // std::cout << "topic_length: " << topic_length << '\n';
                 
                 int log_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log", O_RDONLY, S_IRUSR);
                 assert(log_fd != -1);
                 uint8_t metadata[1024];
                 size_t log_bytes = read(log_fd, metadata, 1024);
-                std::cout << "log_bytes count: " << log_bytes << '\n';
-                for (int i = 0; i < log_bytes; ++i)
-                	printf("%02X ", metadata[i]);
+
                 // hexdump(metadata, log_bytes);
                 constexpr int log_topic_offset = 162;
 
-                std::string_view topic_name(&req_buf[topic_offset+1]);
 
-                int curr_idx = 0;
-                bool found_topic = false;
-                int found_topic_id_offset = 0;
-                int8_t partitions_length = 1;
-                while(curr_idx < log_bytes)
+                for (int8_t i = 1; i < topic_length; ++i)
                 {
-                    int batch_length_idx = curr_idx+8; //  Batch Length (4 bytes)
-                    int32_t batch_len = ((uint8_t)metadata[batch_length_idx + 0] >> 24 |
-                                         (uint8_t)metadata[batch_length_idx + 1] >> 16 |
-                                         (uint8_t)metadata[batch_length_idx + 2] >> 8 |
-                                         (uint8_t)metadata[batch_length_idx + 3]);
-                                        
-                    std::cout << "batch_len: " << batch_len << '\n';
-                    if (batch_len <= 0)
-                        break;
-                    int next_part = curr_idx+12+batch_len;
+                    std::string_view topic_name(&req_buf[topic_offset + 1]);
+                    // std::cout << i << ": topic_name: " << topic_name << '\n';
 
-                    int records_len_offset = curr_idx + 57;
-                    int32_t records_len = ((uint8_t)metadata[records_len_offset + 0] >> 24 |
-                                           (uint8_t)metadata[records_len_offset + 1] >> 16 |
-                                           (uint8_t)metadata[records_len_offset + 2] >> 8 |
-                                           (uint8_t)metadata[records_len_offset + 3]);
-
-                    
-
-
-                    int this_topic_idx = curr_idx + 71;
-                    std::string_view this_topic_name((char*)metadata+this_topic_idx);
-                    std::cout << "this_topic_name: " << this_topic_name << " records_len: " << records_len << '\n';
-                    if (this_topic_name == topic_name)
+                    int curr_idx = 0;
+                    bool found_topic = false;
+                    int found_topic_id_offset = 0;
+                    int8_t partitions_length = 1;
+                    while (curr_idx < log_bytes)
                     {
-                        found_topic = true;
-                        found_topic_id_offset = this_topic_idx;
-                        partitions_length = records_len;
-                        break;
-                    }
-                    curr_idx = next_part;
-                    partitions_length++;
-                }
+                        int batch_length_idx = curr_idx + 8; //  Batch Length (4 bytes)
+                        int32_t batch_len = ((uint8_t)metadata[batch_length_idx + 0] >> 24 |
+                                             (uint8_t)metadata[batch_length_idx + 1] >> 16 |
+                                             (uint8_t)metadata[batch_length_idx + 2] >> 8 |
+                                             (uint8_t)metadata[batch_length_idx + 3]);
 
-                if (found_topic)
-                {
-                    write_int16_be(&ptr, 0); // (NO_ERROR)
-                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
-                    copy_bytes(&ptr, (char *)metadata + found_topic_id_offset+topic_name.length(), 16);
-                    *ptr++ = 0; // topic.is_internal
-                    *ptr++ = partitions_length; // # of partitions  == 1
-                    for (int i = 0; i < (partitions_length-1); ++i)
-                    {
-                        write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
-                        write_int32_be(&ptr, i); // # Partition 0 - Partition Index (INT32, 0)
-                        write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
-                        write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
-                        *ptr++ = 2;              // # Partition 0 - Replica nodes length + 1 (1 replica node)
-                        write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
-                        *ptr++ = 2;              // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
-                        write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
-                        *ptr++ = 1;              // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
-                        *ptr++ = 1;              // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
-                        *ptr++ = 1;              // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
-                        *ptr++ = 0;              // # Empty tag buffer
+                        // std::cout << "batch_len: " << batch_len << '\n';
+                        if (batch_len <= 0)
+                            break;
+                        int next_part = curr_idx + 12 + batch_len;
+
+                        int records_len_offset = curr_idx + 57;
+                        int32_t records_len = ((uint8_t)metadata[records_len_offset + 0] >> 24 |
+                                               (uint8_t)metadata[records_len_offset + 1] >> 16 |
+                                               (uint8_t)metadata[records_len_offset + 2] >> 8 |
+                                               (uint8_t)metadata[records_len_offset + 3]);
+
+                        int this_topic_idx = curr_idx + 71;
+                        std::string_view this_topic_name((char *)metadata + this_topic_idx);
+                        // std::cout << "this_topic_name: " << this_topic_name << " records_len: " << records_len << '\n';
+                        if (this_topic_name == topic_name)
+                        {
+                            found_topic = true;
+                            found_topic_id_offset = this_topic_idx;
+                            partitions_length = records_len;
+                            break;
+                        }
+                        curr_idx = next_part;
+                        partitions_length++;
                     }
 
-                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
-                    *ptr++ = TAG_BUFFER;
-                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
-                    *ptr++ = TAG_BUFFER;
-                                    
-                } else
-                {
-                    write_int16_be(&ptr, 3); // (UNKNOWN_TOPIC)
-                    copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length()+1);
-                    for (int i = 0; i < 16; ++i) // topic_id
-                        *ptr++ = 0;
-                    
-                    *ptr++ = 0; // topic.is_internal
-                    *ptr++ = 1; // topic.partition
-                    write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
-                    *ptr++ = TAG_BUFFER;
-                    *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
-                    *ptr++ = TAG_BUFFER;
+                    if (found_topic)
+                    {
+                        write_int16_be(&ptr, 0); // (NO_ERROR)
+                        copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length() + 1);
+                        copy_bytes(&ptr, (char *)metadata + found_topic_id_offset + topic_name.length(), 16);
+                        *ptr++ = 0;                 // topic.is_internal
+                        *ptr++ = partitions_length; // # of partitions  == 1
+                        for (int i = 0; i < (partitions_length - 1); ++i)
+                        {
+                            write_int16_be(&ptr, 0); // # Partition 0 - Error Code (INT16, 0)
+                            write_int32_be(&ptr, i); // # Partition 0 - Partition Index (INT32, 0)
+                            write_int32_be(&ptr, 1); // # Partition 0 - Leader ID (INT32, 1)
+                            write_int32_be(&ptr, 0); // # Partition 0 - Leader Epoch (INT32, 0)
+                            *ptr++ = 2;              // # Partition 0 - Replica nodes length + 1 (1 replica node)
+                            write_int32_be(&ptr, 1); // #   - Replica node 1 (INT32, 1)
+                            *ptr++ = 2;              // # Partition 0 - ISR Nodes length + 1 (INT32, 2)
+                            write_int32_be(&ptr, 1); // #   - ISR Node 1 (INT32, 1)
+                            *ptr++ = 1;              // # Partition 0 - Eligible Leader Replicas count + 1 (INT32, 1) => 0 leader replicas
+                            *ptr++ = 1;              // # Partition 0 - Last Known ELR count + 1 (INT32, 1) => 0 last known leader replica
+                            *ptr++ = 1;              // # Partition 0 - Offline replicas count + 1 (INT32, 1) => 0 offline replicas
+                            *ptr++ = 0;              // # Empty tag buffer
+                        }
+
+                        write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                        *ptr++ = TAG_BUFFER;
+                    }
+                    else
+                    {
+                        write_int16_be(&ptr, 3); // (UNKNOWN_TOPIC)
+                        copy_bytes(&ptr, &req_buf[topic_offset], topic_name.length() + 1);
+                        for (int i = 0; i < 16; ++i) // topic_id
+                            *ptr++ = 0;
+
+                        *ptr++ = 0;                       // topic.is_internal
+                        *ptr++ = 1;                       // topic.partition
+                        write_int32_be(&ptr, 0x00000df8); // Topic Authorized Operations
+                        *ptr++ = TAG_BUFFER;
+                    }
+                    topic_offset += topic_name.length() + 2;
                 }
+
+                *ptr++ = 0xFF; // Next Cursor (0xff, indicating a null value.)
+                *ptr++ = TAG_BUFFER;
             }
 
             if (request_api_key == 0x0012) // API Versions
