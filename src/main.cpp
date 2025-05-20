@@ -305,6 +305,9 @@ int main(int argc, char* argv[])
                     int found_topic_id_offset = 0;
                     int8_t partitions_length = 2;
                     int16_t error_code = 100; // (UNKNOWN_TOPIC_ID)
+                    int8_t compact_records_length = 0;
+                    uint8_t record_data[1024];
+
                     while (curr_log_idx < total_bytes_in_log)
                     {
                         int batch_length_idx = curr_log_idx + 8; //  Batch Length (4 bytes)
@@ -329,7 +332,16 @@ int main(int argc, char* argv[])
                         uint8_t *B = (uint8_t *)req_buf + topic_offset;
                         
                         if (std::memcmp(A, B, 16) == 0)
-                        {    
+                        {   
+                            std::string topic_name((char*)metadata+log_topic_idx+1);
+                            std::string record_file = "/tmp/kraft-combined-logs/" + topic_name + "-0/00000000000000000000.log";
+                            int record_fd = open(record_file.c_str(), O_RDONLY, S_IRUSR);
+                            assert(record_fd != -1);
+                            
+                            size_t record_len = read(record_fd, record_data, 1024);
+                            compact_records_length = record_len;
+                            // hexdump(record_data, record_len);
+
                             found_topic = true;
                             found_topic_id_offset = log_topic_idx;
                             partitions_length = records_len;
@@ -350,7 +362,8 @@ int main(int argc, char* argv[])
                         write_int64_be(&ptr, 0xffffffffffffffff); // log_start_offset
                         *ptr++ = 0;              // num_aborted_transactions
                         write_int32_be(&ptr, 0xffffffff); // preferred_read_replica
-                        *ptr++ = TAG_BUFFER;
+                        *ptr++ = compact_records_length; // .compact_records_length
+                        copy_bytes(&ptr, (char*)record_data, compact_records_length);
                         *ptr++ = TAG_BUFFER;
                         *ptr++ = TAG_BUFFER;
                     }
@@ -400,9 +413,4 @@ int main(int argc, char* argv[])
 
     close(server_fd);
     return 0;
-}
-
-void DescribeTopicPartitionsResponse(uint8_t *ptr)
-{
-    
 }
