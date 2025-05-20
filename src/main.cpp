@@ -111,9 +111,9 @@ void hexdump(const void *data, size_t size)
 
     // Null-terminate and print once
     buffer[buf_used] = '\0';
-    printf("\n---------------------[start]--------------------\n"
-           "%s"
-           "\n----------------------[end]---------------------\n",
+    printf("Idx       | Hex                                             | ASCII\n"
+           "----------+-------------------------------------------------+-----------------\n"
+           "%s",
            buffer);
 }
 
@@ -121,9 +121,9 @@ void hexdump(const void *data, size_t size)
 int main(int argc, char* argv[])
 {
     // Disable output buffering
-    std::cout << std::unitbuf;
-    std::cerr << std::unitbuf;
-    setbuf(stdout, 0);
+    // std::cout << std::unitbuf;
+    // std::cerr << std::unitbuf;
+    // setbuf(stdout, 0);
 
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0) {
@@ -430,7 +430,9 @@ int main(int argc, char* argv[])
 
             write(client_fd, resp_buf, message_size);
             }
-
+        
+        fflush(stdout);
+        std::cout.flush();
         close(client_fd);
     }
 
