@@ -31,6 +31,29 @@ inline void write_int64_be(uint8_t **dest, int64_t value)
     (*dest)[7] = value & 0xFF;
     (*dest) += 8;
 }
+size_t varint_encode(uint64_t value, uint8_t *out)
+{
+    uint8_t tmp[10];
+    int i = 0;
+    // Extract 7-bit groups from the value
+    do
+    {
+        tmp[i++] = value & 0x7F;
+        value >>= 7;
+    } while (value > 0);
+
+    // Write from most significant to least
+    size_t out_len = i;
+    for (int j = i - 1; j >= 0; --j)
+    {
+        uint8_t byte = tmp[j];
+        // Set continuation bit if not the last (least significant) byte
+        if (j != 0)
+            byte |= 0x80;
+        *out++ = byte;
+    }
+    return out_len;
+}
 
 inline void write_int16_be(uint8_t **dest, int16_t value)
 {
@@ -303,9 +326,9 @@ int main(int argc, char* argv[])
                     int curr_log_idx = 0;
                     bool found_topic = false;
                     int found_topic_id_offset = 0;
-                    int8_t partitions_length = 2;
+                    int8_t partitions_length = req_buf[topic_offset+16];
                     int16_t error_code = 100; // (UNKNOWN_TOPIC_ID)
-                    int8_t compact_records_length = 0;
+                    size_t compact_records_length = 0;
                     uint8_t record_data[1024];
 
                     while (curr_log_idx < total_bytes_in_log)
@@ -338,13 +361,11 @@ int main(int argc, char* argv[])
                             int record_fd = open(record_file.c_str(), O_RDONLY, S_IRUSR);
                             assert(record_fd != -1);
                             
-                            size_t record_len = read(record_fd, record_data, 1024);
-                            compact_records_length = record_len;
-                            // hexdump(record_data, record_len);
+                            compact_records_length = read(record_fd, record_data, 1024);
+                            hexdump(record_data, compact_records_length);
 
                             found_topic = true;
                             found_topic_id_offset = log_topic_idx;
-                            partitions_length = records_len;
                             error_code = 0;
                             break;
                         }
@@ -362,7 +383,9 @@ int main(int argc, char* argv[])
                         write_int64_be(&ptr, 0xffffffffffffffff); // log_start_offset
                         *ptr++ = 0;              // num_aborted_transactions
                         write_int32_be(&ptr, 0xffffffff); // preferred_read_replica
-                        *ptr++ = compact_records_length; // .compact_records_length
+                        uint8_t compact_records_length_buf[9];
+                        size_t varint_len = varint_encode(compact_records_length, compact_records_length_buf);
+                        copy_bytes(&ptr, (char*)compact_records_length_buf, varint_len);
                         copy_bytes(&ptr, (char*)record_data, compact_records_length);
                         *ptr++ = TAG_BUFFER;
                         *ptr++ = TAG_BUFFER;
