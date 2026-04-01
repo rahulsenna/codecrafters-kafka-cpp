@@ -402,7 +402,7 @@ int main(int argc, char* argv[])
                     error_code = 0; // (NO_ERROR)
                 
                 write_int16_be(&ptr, error_code);
-                int8_t num_api_keys = 1 + 3; // 1 + # of elements because 0 is null array and 1 is empty array
+                int8_t num_api_keys = 1 + 4; // 1 + # of elements because 0 is null array and 1 is empty array
                 *ptr++ = num_api_keys;
                 copy_bytes(&ptr, &req_buf[req_api_offset], 2); // api_key
                 write_int16_be(&ptr, 0);                       // min_ver
@@ -417,6 +417,11 @@ int main(int argc, char* argv[])
                 write_int16_be(&ptr, 1); // api_key ( FETCH )
                 write_int16_be(&ptr, 0);  // min_ver
                 write_int16_be(&ptr, 16);  // max_ver
+                *ptr++ = TAG_BUFFER;
+
+                write_int16_be(&ptr, 0); // api_key ( PRODUCE )
+                write_int16_be(&ptr, 0);  // min_ver
+                write_int16_be(&ptr, 11);  // max_ver
                 *ptr++ = TAG_BUFFER;
 
                 write_int32_be(&ptr, 0); // throttle_time_ms
