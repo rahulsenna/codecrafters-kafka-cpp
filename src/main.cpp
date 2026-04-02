@@ -394,6 +394,54 @@ int main(int argc, char* argv[])
                 *ptr++ = TAG_BUFFER;
 
             }
+            if (request_api_key == 0x0000) // Produce
+            {
+              constexpr int client_id_offset = cor_id_offset + 4;
+              int16_t client_id_str_len = ((uint8_t) req_buf[client_id_offset] << 8) | (uint8_t) req_buf[client_id_offset + 1];
+              int client_id_len = 2 + client_id_str_len + 1;
+              int body_offset = client_id_offset + client_id_len;
+
+              // transactional_id: COMPACT_NULLABLE_STRING (0 = null)
+              uint8_t txn_id_len = req_buf[body_offset++];
+              if (txn_id_len > 1) body_offset += txn_id_len - 1;
+
+              body_offset += 2; // acks (INT16)
+              body_offset += 4; // timeout_ms (INT32)
+
+              uint8_t topic_array_len = req_buf[body_offset++];   // compact array N+1
+              uint8_t topic_name_len = req_buf[body_offset++];   // compact string N+1
+              char* topic_name_ptr = (char*) req_buf + body_offset;
+              int     topic_name_actual = topic_name_len - 1;
+              body_offset += topic_name_actual;
+
+              // Read partition index to echo back
+              uint8_t parts_array_len = req_buf[body_offset++];
+              int32_t partition_index = ((uint8_t) req_buf[body_offset + 0] << 24) |
+                ((uint8_t) req_buf[body_offset + 1] << 16) |
+                ((uint8_t) req_buf[body_offset + 2] << 8) |
+                (uint8_t) req_buf[body_offset + 3];
+
+              *ptr++ = TAG_BUFFER;
+
+              *ptr++ = 0x02;       // responses[] = 1 topic
+              *ptr++ = topic_name_len;
+              copy_bytes(&ptr, topic_name_ptr, topic_name_actual);
+
+              *ptr++ = 0x02;                    // partition_responses[] = 1 partition
+              write_int32_be(&ptr, partition_index); // echo from request ← fixed
+              write_int16_be(&ptr, 3);          // UNKNOWN_TOPIC_OR_PARTITION
+              write_int64_be(&ptr, -1LL);       // base_offset
+              write_int64_be(&ptr, -1LL);       // log_append_time_ms
+              write_int64_be(&ptr, -1LL);       // log_start_offset
+              *ptr++ = 0x01;                    // record_errors[] empty
+              *ptr++ = 0x00;                    // error_message null
+              *ptr++ = TAG_BUFFER;              // partition tag_buffer
+
+              *ptr++ = TAG_BUFFER;              // topic tag_buffer
+
+              write_int32_be(&ptr, 0);          // throttle_time_ms
+              *ptr++ = TAG_BUFFER;              // body tag_buffer
+            }
             if (request_api_key == 0x0012) // API Versions
             {
                 // https://kafka.apache.org/protocol.html#The_Messages_ApiVersions
