@@ -398,10 +398,7 @@ int main(int argc, char* argv[])
             {
               constexpr int client_id_offset = cor_id_offset + 4;
               int16_t client_id_str_len = ((uint8_t) req_buf[client_id_offset] << 8) | (uint8_t) req_buf[client_id_offset + 1];
-              int client_id_len = 2 + client_id_str_len + 1;
-              int body_offset = client_id_offset + client_id_len;
-
-              // transactional_id: COMPACT_NULLABLE_STRING (0 = null)
+              int body_offset = client_id_offset + 2 + client_id_str_len + 1;
               uint8_t txn_id_len = req_buf[body_offset++];
               if (txn_id_len > 1) body_offset += txn_id_len - 1;
 
@@ -413,6 +410,7 @@ int main(int argc, char* argv[])
               char* topic_name_ptr = (char*) req_buf + body_offset;
               int     topic_name_actual = topic_name_len - 1;
               body_offset += topic_name_actual;
+              std::string_view topic_name(topic_name_ptr, topic_name_actual);
 
               // Read partition index to echo back
               uint8_t parts_array_len = req_buf[body_offset++];
@@ -423,19 +421,56 @@ int main(int argc, char* argv[])
 
               *ptr++ = TAG_BUFFER;
 
+              // --- Validate topic + partition in cluster metadata ---
+              int meta_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log",
+                O_RDONLY, S_IRUSR);
+              assert(meta_fd != -1);
+              uint8_t metadata[1024];
+              size_t  meta_bytes = read(meta_fd, metadata, 1024);
+              close(meta_fd);
+
+              int16_t error_code = 3; // assume UNKNOWN_TOPIC_OR_PARTITION
+              int32_t num_partitions = 0;
+
+              int curr = 0;
+              while (curr < (int) meta_bytes)
+              {
+                int32_t batch_len = ((uint8_t) metadata[curr + 8] << 24) |
+                  ((uint8_t) metadata[curr + 9] << 16) |
+                  ((uint8_t) metadata[curr + 10] << 8) |
+                  (uint8_t) metadata[curr + 11];
+                if (batch_len <= 0) break;
+                int next = curr + 12 + batch_len;
+
+                int32_t records_len = ((uint8_t) metadata[curr + 57] << 24) |
+                  ((uint8_t) metadata[curr + 58] << 16) |
+                  ((uint8_t) metadata[curr + 59] << 8) |
+                  (uint8_t) metadata[curr + 60];
+
+                int name_idx = curr + 71;
+                std::string_view this_name((char*) metadata + name_idx, topic_name_actual);
+                if (this_name == topic_name)
+                {
+                  num_partitions = records_len;
+                  if (partition_index < num_partitions)
+                    error_code = 0;
+                  break;
+                }
+                curr = next;
+              }
               *ptr++ = 0x02;       // responses[] = 1 topic
               *ptr++ = topic_name_len;
               copy_bytes(&ptr, topic_name_ptr, topic_name_actual);
 
-              *ptr++ = 0x02;                    // partition_responses[] = 1 partition
-              write_int32_be(&ptr, partition_index); // echo from request ← fixed
-              write_int16_be(&ptr, 3);          // UNKNOWN_TOPIC_OR_PARTITION
-              write_int64_be(&ptr, -1LL);       // base_offset
-              write_int64_be(&ptr, -1LL);       // log_append_time_ms
-              write_int64_be(&ptr, -1LL);       // log_start_offset
-              *ptr++ = 0x01;                    // record_errors[] empty
-              *ptr++ = 0x00;                    // error_message null
-              *ptr++ = TAG_BUFFER;              // partition tag_buffer
+              *ptr++ = 0x02;
+              write_int32_be(&ptr, partition_index);
+              write_int16_be(&ptr, error_code);
+              write_int64_be(&ptr, error_code == 0 ? 0LL : -1LL);  // base_offset
+              write_int64_be(&ptr, -1LL);                           // log_append_time_ms
+              write_int64_be(&ptr, error_code == 0 ? 0LL : -1LL);  // log_start_offset
+              *ptr++ = 0x01; // record_errors[] empty
+              *ptr++ = 0x00; // error_message null
+              *ptr++ = TAG_BUFFER;
 
               *ptr++ = TAG_BUFFER;              // topic tag_buffer
 
