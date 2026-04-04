@@ -10,6 +10,8 @@
 #include <fcntl.h>
 #include <string_view>
 #include <cassert>
+#include <stdio.h>
+#include <sys/stat.h>
 
 inline void write_int32_be(uint8_t **dest, int32_t value)
 {
@@ -418,8 +420,20 @@ int main(int argc, char* argv[])
                 ((uint8_t) req_buf[body_offset + 1] << 16) |
                 ((uint8_t) req_buf[body_offset + 2] << 8) |
                 (uint8_t) req_buf[body_offset + 3];
+              body_offset += 4; // ← advance past partition_index
 
-              *ptr++ = TAG_BUFFER;
+              // COMPACT_NULLABLE_BYTES varint (N+1 encoding)
+              uint64_t records_varint = 0;
+              int shift = 0;
+              while (true)
+              {
+                uint8_t b = req_buf[body_offset++];
+                records_varint |= (uint64_t) (b & 0x7F) << shift;
+                if (!(b & 0x80)) break;
+                shift += 7;
+              }
+              uint8_t* record_batch_ptr = (uint8_t*)req_buf + body_offset;
+              size_t   record_batch_len = records_varint - 1; // N+1 → subtract 1
 
               // --- Validate topic + partition in cluster metadata ---
               int meta_fd = open("/tmp/kraft-combined-logs/__cluster_metadata-0/00000000000000000000.log",
@@ -458,6 +472,20 @@ int main(int argc, char* argv[])
                 }
                 curr = next;
               }
+
+              if (error_code == 0)
+              {
+                std::string log_dir = "/tmp/kraft-combined-logs/" + std::string(topic_name) + "-" + std::to_string(partition_index);
+                mkdir(log_dir.c_str(), 0755);
+                std::string log_path = log_dir + "/00000000000000000000.log";
+                int log_fd = open(log_path.c_str(), O_WRONLY | O_CREAT | O_APPEND, 0644);
+                assert(log_fd != -1);
+                write(log_fd, record_batch_ptr, record_batch_len);
+                close(log_fd);
+              }
+
+              // --- Build response ---
+              *ptr++ = TAG_BUFFER;
               *ptr++ = 0x02;       // responses[] = 1 topic
               *ptr++ = topic_name_len;
               copy_bytes(&ptr, topic_name_ptr, topic_name_actual);
